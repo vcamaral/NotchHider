@@ -27,3 +27,7 @@ Generated wallpapers are stored in `~/Library/Application Support/NotchHider/`.
 
 - Dynamic (time-of-day) wallpapers become static.
 - Apple's animated aerial wallpapers are not supported and are left untouched.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
