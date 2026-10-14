@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var timer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before touching the wallpaper: this may quit and relaunch from /Applications.
+        MoveToApplications.offerIfNeeded()
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "rectangle.topthird.inset.filled",
                                            accessibilityDescription: "NotchHider")
@@ -44,6 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        if let warning = model.unreadableMessage {
+            let item = NSMenuItem(title: "Can't read the current wallpaper", action: #selector(openWallpaperSettings), keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            item.toolTip = warning
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+
         let toggle = NSMenuItem(title: "Hide Notch", action: #selector(toggleEnabled), keyEquivalent: "")
         toggle.state = model.enabled ? .on : .off
         menu.addItem(toggle)
@@ -57,6 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Quit (Restore Wallpaper)", action: #selector(quit), keyEquivalent: "q"))
 
         menu.items.forEach { $0.target = self }
+    }
+
+    @objc private func openWallpaperSettings() {
+        model.openWallpaperSettings()
     }
 
     @objc private func toggleEnabled() {

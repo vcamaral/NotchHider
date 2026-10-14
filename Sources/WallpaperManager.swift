@@ -9,17 +9,29 @@ import UniformTypeIdentifiers
 final class WallpaperManager {
     private let defaults = UserDefaults.standard
     private let originalsKey = "originalWallpapers" // [screenKey: original path]
+    private let cachedOriginalsKey = "cachedOriginalWallpapers" // [screenKey: path of our copy of it]
     let outputDir: URL
+    /// Copies of the user's wallpapers, so we keep working (and can restore) if the originals get deleted.
+    private let originalsDir: URL
+
+    /// Names of screens whose current wallpaper couldn't be read during the last `apply()`.
+    private(set) var unreadableScreens: [String] = []
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         outputDir = support.appendingPathComponent("NotchHider", isDirectory: true)
-        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        originalsDir = outputDir.appendingPathComponent("Originals", isDirectory: true)
+        try? FileManager.default.createDirectory(at: originalsDir, withIntermediateDirectories: true)
     }
 
     private var originals: [String: String] {
         get { defaults.dictionary(forKey: originalsKey) as? [String: String] ?? [:] }
         set { defaults.set(newValue, forKey: originalsKey) }
+    }
+
+    private var cachedOriginals: [String: String] {
+        get { defaults.dictionary(forKey: cachedOriginalsKey) as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: cachedOriginalsKey) }
     }
 
     static func screenKey(_ screen: NSScreen) -> String {
@@ -36,12 +48,15 @@ final class WallpaperManager {
         return menuBar > 0 ? menuBar : NSStatusBar.system.thickness
     }
 
+    /// Whether `url` is a wallpaper we generated (not one of the cached originals).
     private func isOurs(_ url: URL) -> Bool {
-        url.standardizedFileURL.path.hasPrefix(outputDir.standardizedFileURL.path)
+        url.deletingLastPathComponent().standardizedFileURL.path == outputDir.standardizedFileURL.path
+            && url.lastPathComponent.hasPrefix("wallpaper-")
     }
 
-    /// Makes sure every notched screen shows a processed wallpaper. Cheap when nothing changed.
+    /// Makes sure every screen shows a processed wallpaper. Cheap when nothing changed.
     func apply() {
+        var unreadable: [String] = []
         for screen in NSScreen.screens {
             guard let band = Self.bandHeight(for: screen),
                   let current = NSWorkspace.shared.desktopImageURL(for: screen) else { continue }
@@ -50,12 +65,20 @@ final class WallpaperManager {
             let source: URL
             if isOurs(current) {
                 // Already processed; regenerate only if the screen geometry changed (file name encodes it).
-                guard let originalPath = originals[key] else { continue }
-                source = URL(fileURLWithPath: originalPath)
+                guard let sourcePath = cachedOriginals[key] ?? originals[key] else { continue }
+                source = URL(fileURLWithPath: sourcePath)
+                // Without the source we can't regenerate; keep showing what we already made.
+                guard FileManager.default.fileExists(atPath: source.path) else { continue }
                 if current.lastPathComponent == outputName(source: source, screen: screen, band: band) { continue }
             } else {
-                source = current
+                // macOS keeps showing a wallpaper whose file was deleted, but we can't read it.
+                guard let cached = cacheOriginal(current) else {
+                    unreadable.append(screen.localizedName)
+                    continue
+                }
                 originals[key] = current.path
+                cachedOriginals[key] = cached.path
+                source = cached
             }
 
             do {
@@ -67,8 +90,10 @@ final class WallpaperManager {
                 NSLog("NotchHider: applied %@ on %@", output.lastPathComponent, screen.localizedName)
             } catch {
                 NSLog("NotchHider: failed for %@: %@", source.path, String(describing: error))
+                unreadable.append(screen.localizedName)
             }
         }
+        unreadableScreens = unreadable
         cleanup()
     }
 
@@ -76,11 +101,30 @@ final class WallpaperManager {
     func restore() {
         for screen in NSScreen.screens {
             let key = Self.screenKey(screen)
-            guard let current = NSWorkspace.shared.desktopImageURL(for: screen), isOurs(current),
-                  let originalPath = originals[key] else { continue }
-            let original = URL(fileURLWithPath: originalPath)
-            guard FileManager.default.fileExists(atPath: original.path) else { continue }
-            try? NSWorkspace.shared.setDesktopImageURL(original, for: screen, options: [:])
+            guard let current = NSWorkspace.shared.desktopImageURL(for: screen), isOurs(current) else { continue }
+            // Prefer the user's own file; fall back to our copy if it was deleted.
+            let candidates = [originals[key], cachedOriginals[key]].compactMap { $0 }
+            guard let path = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else { continue }
+            try? NSWorkspace.shared.setDesktopImageURL(URL(fileURLWithPath: path), for: screen, options: [:])
+        }
+    }
+
+    /// Copies a wallpaper into `originalsDir`, or returns nil if it can't be read.
+    private func cacheOriginal(_ url: URL) -> URL? {
+        let fm = FileManager.default
+        guard fm.isReadableFile(atPath: url.path) else { return nil }
+        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?
+            .timeIntervalSince1970 ?? 0
+        let hash = SHA256.hash(data: Data("\(url.path)|\(mtime)".utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        let ext = url.pathExtension.isEmpty ? "" : "." + url.pathExtension
+        let copy = originalsDir.appendingPathComponent("original-\(hash)\(ext)")
+        if fm.fileExists(atPath: copy.path) { return copy }
+        do {
+            try fm.copyItem(at: url, to: copy)
+            return copy
+        } catch {
+            NSLog("NotchHider: couldn't copy %@: %@", url.path, String(describing: error))
+            return nil
         }
     }
 
@@ -138,15 +182,19 @@ final class WallpaperManager {
         return output
     }
 
-    /// Deletes generated files that no screen is using anymore.
+    /// Deletes generated wallpapers and cached originals that nothing uses anymore.
     private func cleanup() {
         let inUse = Set(NSScreen.screens.compactMap { NSWorkspace.shared.desktopImageURL(for: $0)?.lastPathComponent })
-        let files = (try? FileManager.default.contentsOfDirectory(at: outputDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            .union(cachedOriginals.values.map { URL(fileURLWithPath: $0).lastPathComponent })
         let cutoff = Date().addingTimeInterval(-7 * 24 * 3600) // other Spaces may still reference recent files
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
+        let files = ((try? fm.contentsOfDirectory(at: outputDir, includingPropertiesForKeys: keys)) ?? [])
+            + ((try? fm.contentsOfDirectory(at: originalsDir, includingPropertiesForKeys: keys)) ?? [])
         for file in files where !inUse.contains(file.lastPathComponent) {
-            let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if mtime < cutoff { try? FileManager.default.removeItem(at: file) }
+            let values = try? file.resourceValues(forKeys: Set(keys))
+            guard values?.isRegularFile == true else { continue }
+            if (values?.contentModificationDate ?? .distantPast) < cutoff { try? fm.removeItem(at: file) }
         }
     }
 }
-

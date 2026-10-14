@@ -5,13 +5,16 @@ cd "$(dirname "$0")/.."
 
 ./build.sh
 
-STAGING=build/dmg
-DMG=build/NotchHider.dmg
-rm -rf "$STAGING" "$DMG"
-mkdir -p "$STAGING"
-cp -R build/NotchHider.app "$STAGING/"
-ln -s /Applications "$STAGING/Applications"
+# dmgbuild lays out the DMG window without scripting Finder.
+if [ ! -x build/venv/bin/dmgbuild ]; then
+  python3 -m venv build/venv
+  build/venv/bin/pip install -q dmgbuild
+fi
 
-hdiutil create -volname NotchHider -srcfolder "$STAGING" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
-rm -rf "$STAGING"
-echo "Built $DMG"
+swift scripts/make-dmg-background.swift build/dmg-background.png 1
+swift scripts/make-dmg-background.swift build/dmg-background@2x.png 2
+tiffutil -cathidpicheck build/dmg-background.png build/dmg-background@2x.png -out build/dmg-background.tiff >/dev/null
+
+rm -f build/NotchHider.dmg
+build/venv/bin/dmgbuild -s scripts/dmg-settings.py NotchHider build/NotchHider.dmg
+echo "Built build/NotchHider.dmg"

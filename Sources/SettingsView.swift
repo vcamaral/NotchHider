@@ -17,6 +17,19 @@ struct SettingsView: View {
                 }
             }
 
+            if let warning = model.unreadableMessage {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        Button("Open Wallpaper Settings…") { model.openWallpaperSettings() }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Hide Notch", isOn: $model.enabled)
                 Toggle("Launch at Login", isOn: Binding(
