@@ -6,9 +6,15 @@ A tiny macOS menu bar app that hides the notch by painting a black band at the t
 - Follows wallpaper, Space, and display changes automatically.
 - Restores your original wallpaper when disabled or quit.
 
+## Settings
+
+Open **Settings…** from the menu bar icon, or open NotchHider again from Finder or Spotlight, to toggle the effect and Launch at Login.
+
+To hide the menu bar icon, use **System Settings › Menu Bar** — the settings window has a shortcut to it. Opening the app again always brings the settings window back.
+
 ## Build
 
-Requires the Xcode Command Line Tools.
+Requires the Xcode Command Line Tools. The app icon is drawn by `scripts/make-icon.swift` during the build.
 
 ```sh
 ./build.sh
