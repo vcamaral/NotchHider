@@ -18,6 +18,10 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
-swiftc -O -target arm64-apple-macos13.0 Sources/*.swift -o "$APP/Contents/MacOS/NotchHider"
+# Universal binary (Apple silicon + Intel).
+for arch in arm64 x86_64; do
+  swiftc -O -target $arch-apple-macos13.0 Sources/*.swift -o build/NotchHider-$arch
+done
+lipo -create build/NotchHider-arm64 build/NotchHider-x86_64 -output "$APP/Contents/MacOS/NotchHider"
 codesign --force --sign - "$APP"
 echo "Built $APP"
