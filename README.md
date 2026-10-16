@@ -14,6 +14,12 @@ A tiny macOS menu bar app that hides the notch by painting a black band at the t
 
 That's it — no Terminal or building needed. If you open the app straight from the DMG, it offers to move itself into Applications.
 
+Or with Homebrew, which also skips the first-launch step below:
+
+```sh
+brew install --cask vcamaral/tap/notchhider
+```
+
 ### First launch
 
 NotchHider isn't notarized by Apple yet, so macOS blocks it the first time. To allow it:
@@ -43,7 +49,10 @@ Only needed if you want to change the code. Requires the Xcode Command Line Tool
 ```sh
 ./build.sh                 # builds build/NotchHider.app
 ./scripts/make-dmg.sh      # builds the app and packages build/NotchHider.dmg
+./scripts/release.sh       # publishes the GitHub release and updates the Homebrew cask
 ```
+
+To release, bump `CFBundleShortVersionString` in `Info.plist` and commit first; `release.sh` takes an optional notes file.
 
 The app icon (`scripts/make-icon.swift`) and the DMG background (`scripts/make-dmg-background.swift`) are drawn in code during the build. Generated wallpapers are stored in `~/Library/Application Support/NotchHider/`.
 
