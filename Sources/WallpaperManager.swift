@@ -10,6 +10,7 @@ final class WallpaperManager {
     private let defaults = UserDefaults.standard
     private let originalsKey = "originalWallpapers" // [screenKey: original path]
     private let cachedOriginalsKey = "cachedOriginalWallpapers" // [screenKey: path of our copy of it]
+    private let generatedKey = "generatedWallpapers" // [screenKey: file name of the last wallpaper we set]
     let outputDir: URL
     /// Copies of the user's wallpapers, so we keep working (and can restore) if the originals get deleted.
     private let originalsDir: URL
@@ -34,10 +35,23 @@ final class WallpaperManager {
         set { defaults.set(newValue, forKey: cachedOriginalsKey) }
     }
 
-    static func screenKey(_ screen: NSScreen) -> String {
-        let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
-        let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue()
-        return uuid.map { CFUUIDCreateString(nil, $0) as String } ?? screen.localizedName
+    private var generated: [String: String] {
+        get { defaults.dictionary(forKey: generatedKey) as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: generatedKey) }
+    }
+
+    /// Stable per-display key, or nil while a display is still being (dis)connected and has no UUID yet.
+    static func screenKey(_ screen: NSScreen) -> String? {
+        guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
+    /// The wallpaper macOS falls back to when it can't show the configured one (e.g. mid display reconnect).
+    private static func isSystemFallback(_ url: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        return path == "/System/Library/CoreServices/DefaultDesktop.heic"
+            || path.hasPrefix("/System/Library/Wallpapers/.default/")
     }
 
     /// Height in points of the band to paint black: the notch area, or the menu bar on other screens.
@@ -59,11 +73,15 @@ final class WallpaperManager {
         var unreadable: [String] = []
         for screen in NSScreen.screens {
             guard let band = Self.bandHeight(for: screen),
-                  let current = NSWorkspace.shared.desktopImageURL(for: screen) else { continue }
-            let key = Self.screenKey(screen)
+                  let current = NSWorkspace.shared.desktopImageURL(for: screen),
+                  let key = Self.screenKey(screen) else { continue }
 
             let source: URL
-            if isOurs(current) {
+            if Self.isSystemFallback(current), let cachedPath = cachedOriginals[key],
+               FileManager.default.fileExists(atPath: cachedPath) {
+                // macOS showed its default instead of our wallpaper; put the user's back rather than adopting it.
+                source = URL(fileURLWithPath: cachedPath)
+            } else if isOurs(current) {
                 // Already processed; regenerate only if the screen geometry changed (file name encodes it).
                 guard let sourcePath = cachedOriginals[key] ?? originals[key] else { continue }
                 source = URL(fileURLWithPath: sourcePath)
@@ -87,6 +105,7 @@ final class WallpaperManager {
                     .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
                     .allowClipping: true,
                 ])
+                generated[key] = output.lastPathComponent
                 NSLog("NotchHider: applied %@ on %@", output.lastPathComponent, screen.localizedName)
             } catch {
                 NSLog("NotchHider: failed for %@: %@", source.path, String(describing: error))
@@ -100,8 +119,8 @@ final class WallpaperManager {
     /// Puts the original wallpapers back.
     func restore() {
         for screen in NSScreen.screens {
-            let key = Self.screenKey(screen)
-            guard let current = NSWorkspace.shared.desktopImageURL(for: screen), isOurs(current) else { continue }
+            guard let key = Self.screenKey(screen),
+                  let current = NSWorkspace.shared.desktopImageURL(for: screen), isOurs(current) else { continue }
             // Prefer the user's own file; fall back to our copy if it was deleted.
             let candidates = [originals[key], cachedOriginals[key]].compactMap { $0 }
             guard let path = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else { continue }
@@ -186,6 +205,7 @@ final class WallpaperManager {
     private func cleanup() {
         let inUse = Set(NSScreen.screens.compactMap { NSWorkspace.shared.desktopImageURL(for: $0)?.lastPathComponent })
             .union(cachedOriginals.values.map { URL(fileURLWithPath: $0).lastPathComponent })
+            .union(generated.values) // disconnected displays still point at these and will want them back
         let cutoff = Date().addingTimeInterval(-7 * 24 * 3600) // other Spaces may still reference recent files
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
